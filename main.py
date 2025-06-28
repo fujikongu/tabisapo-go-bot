@@ -1,5 +1,5 @@
 
-from flask import Flask, request, abort
+from flask import Flasfrom flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -25,7 +25,7 @@ openai.api_key = OPENAI_API_KEY
 # ユーザーごとの選択ジャンルを記憶
 user_selected_genre = {}
 
-# ジャンルラベル（飲食を5ジャンルに分割）
+# ジャンルラベル（飲食を細分化）
 genre_labels = [
     "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
     "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
@@ -52,7 +52,7 @@ def handle_text(event):
     else:
         quick_reply_buttons = [
             QuickReplyButton(action=MessageAction(label=label, text=label))
-            for label in genre_labels
+            for label in genre_labels[:13]  # ← 最大13個（LINE制限）
         ]
         reply = TextSendMessage(
             text="👇 探したいジャンルを選んでください",
@@ -63,7 +63,7 @@ def handle_text(event):
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     user_id = event.source.user_id
-    genre = user_selected_genre.get(user_id)
+    genre = user_selected_genre.pop(user_id, None)  # ← ジャンル使用後に削除して再ループ防止
 
     if not genre:
         line_bot_api.reply_message(
@@ -95,7 +95,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:20]:  # 最大20件まで処理
+    for spot in results[:10]:  # 🔽 最大10件に制限
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
@@ -123,9 +123,8 @@ def handle_location(event):
         message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message_text))
 
-    # 5件ずつ送信（LINEの一括送信制限に対応）
-    for i in range(0, len(messages), 5):
-        line_bot_api.push_message(user_id, messages[i:i+5])
+    # ✅ 一括で最大10件まで返信（reply_message）
+    line_bot_api.reply_message(event.reply_token, messages)
 
 # 🔽 Render用：アプリ起動処理
 if __name__ == "__main__":
