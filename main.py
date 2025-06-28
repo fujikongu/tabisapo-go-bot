@@ -12,7 +12,7 @@ import requests
 
 app = Flask(__name__)
 
-# 環境変数
+# 環境変数からトークン取得
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -22,7 +22,7 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 openai.api_key = OPENAI_API_KEY
 
-# ユーザーごとの選択ジャンル記録
+# ユーザーごとの選択ジャンルを記憶
 user_selected_genre = {}
 
 # クイックリプライジャンル
@@ -50,13 +50,13 @@ def handle_text(event):
         user_selected_genre[user_id] = text
         reply = TextSendMessage(text=f"📍「{text}」を探します！\n現在地を送信してください。")
     else:
-        buttons = [
+        quick_reply_buttons = [
             QuickReplyButton(action=MessageAction(label=label, text=label))
             for label in genre_labels
         ]
         reply = TextSendMessage(
             text="👇 探したいジャンルを選んでください",
-            quick_reply=QuickReply(items=buttons)
+            quick_reply=QuickReply(items=quick_reply_buttons)
         )
     line_bot_api.reply_message(event.reply_token, reply)
 
@@ -75,6 +75,7 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
+    # Google Maps APIでスポット検索（半径10km）
     maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -83,7 +84,6 @@ def handle_location(event):
         "language": "ja",
         "key": GOOGLE_API_KEY
     }
-
     res = requests.get(maps_url, params=params).json()
     results = res.get("results", [])
 
@@ -95,37 +95,38 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:60]:  # 最大60件取得
+    for spot in results[:60]:  # 最大60件まで処理
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
-        lat = spot["geometry"]["location"]["lat"]
-        lng = spot["geometry"]["location"]["lng"]
-        map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
+        place_lat = spot["geometry"]["location"]["lat"]
+        place_lng = spot["geometry"]["location"]["lng"]
+        map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
 
-        # ChatGPTに紹介文を生成させる（観光案内人スタイル）
-        prompt = f"""あなたは観光案内人です。以下のスポットを旅行者におすすめするとしたら、どう紹介しますか？
+        # ChatGPTによる案内文生成
+        prompt = f"""あなたは観光案内人です。以下のスポットを観光客におすすめするとしたら、どう紹介しますか？
 
 名称：{name}
 ジャンル：{genre}
 
-場所の特徴や雰囲気、旅行者が嬉しいポイントを含めて、100文字以内でやさしい案内文をお願いします。"""
+場所の特徴や雰囲気、旅行者が嬉しいポイントを含めて、100文字以内でやさしい案内文をお願いします。
+"""
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
-            guide = completion.choices[0].message["content"]
+            gpt_message = completion.choices[0].message["content"].strip()
         except Exception:
-            guide = "旅行者におすすめのスポットです！"
+            gpt_message = "旅行者におすすめのスポットです！"
 
-        msg = f"🏞️ {name}\n📍 {address}\n\n{guide}\n\n👉 [Googleマップで見る]({map_link})"
-        messages.append(TextSendMessage(text=msg))
+        message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
+        messages.append(TextSendMessage(text=message_text))
 
-    # 10件ずつ分割送信（LINE制限対策）
-    for i in range(0, len(messages), 10):
-        line_bot_api.push_message(user_id, messages[i:i+10])
+    # 5件ずつ送信（LINE制限対応）
+    for i in range(0, len(messages), 5):
+        line_bot_api.push_message(user_id, messages[i:i+5])
 
-# ✅ 決定事項の起動構文（Render対応済み）
+# 🔽 決定事項：Render対応の起動処理
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
