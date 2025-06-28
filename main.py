@@ -9,10 +9,11 @@ from linebot.models import (
 import os
 import openai
 import requests
+import time
 
 app = Flask(__name__)
 
-# 環境変数からトークン取得
+# 環境変数
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -22,10 +23,10 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 openai.api_key = OPENAI_API_KEY
 
-# ユーザーの選択ジャンルを一時保存
+# ユーザーのジャンル選択保存
 user_selected_genre = {}
 
-# クイックリプライジャンル
+# クイックリプライのジャンル候補
 genre_labels = [
     "トイレ", "駐車場", "飲食店", "カフェ", "ホテル",
     "観光地", "温泉", "遊び場", "コンビニ", "駅"
@@ -51,13 +52,13 @@ def handle_text(event):
         user_selected_genre[user_id] = text
         reply = TextSendMessage(text=f"📍「{text}」を探します！\n現在地を送信してください。")
     else:
-        quick_reply_buttons = [
+        buttons = [
             QuickReplyButton(action=MessageAction(label=label, text=label))
             for label in genre_labels
         ]
         reply = TextSendMessage(
             text="👇 探したいジャンルを選んでください",
-            quick_reply=QuickReply(items=quick_reply_buttons)
+            quick_reply=QuickReply(items=buttons)
         )
     line_bot_api.reply_message(event.reply_token, reply)
 
@@ -76,8 +77,10 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
-    # Google Maps APIでスポット検索（半径10km）
+    # API初回リクエスト
     maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    all_results = []
+
     params = {
         "location": f"{lat},{lng}",
         "radius": 10000,
@@ -85,48 +88,53 @@ def handle_location(event):
         "language": "ja",
         "key": GOOGLE_API_KEY
     }
-    res = requests.get(maps_url, params=params).json()
-    results = res.get("results", [])
 
-    if not results:
+    for _ in range(3):  # 最大3ページ分取得
+        res = requests.get(maps_url, params=params).json()
+        results = res.get("results", [])
+        all_results.extend(results)
+
+        next_page_token = res.get("next_page_token")
+        if not next_page_token:
+            break
+        time.sleep(2)  # next_page_token が有効になるまで少し待機
+        params = {
+            "pagetoken": next_page_token,
+            "key": GOOGLE_API_KEY
+        }
+
+    if not all_results:
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=f"{genre}が近くに見つかりませんでした。")
         )
         return
 
-    # 人気順に並べ替え（レビュー件数が多い順）
-    results = sorted(results, key=lambda x: x.get("user_ratings_total", 0), reverse=True)
-
     messages = []
-    for spot in results[:10]:
+    for spot in all_results[:10]:  # 表示件数は10件まで（LINE制限に配慮）
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
-        rating = spot.get("rating", "N/A")
-        reviews = spot.get("user_ratings_total", 0)
-        place_lat = spot["geometry"]["location"]["lat"]
-        place_lng = spot["geometry"]["location"]["lng"]
-        map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
+        lat = spot["geometry"]["location"]["lat"]
+        lng = spot["geometry"]["location"]["lng"]
+        map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
 
-        # ChatGPTで案内文生成
         prompt = f"{genre}のジャンルでおすすめスポット「{name}」について、旅行者向けにやさしいトーンでおすすめ理由と雰囲気を短く案内してください。"
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
-            gpt_message = completion.choices[0].message["content"]
-        except Exception:
-            gpt_message = "旅行者におすすめのスポットです！"
+            gpt_msg = completion.choices[0].message["content"]
+        except:
+            gpt_msg = "旅行者におすすめのスポットです！"
 
-        message = f"🏞️ {name}\n📍 {address}\n⭐️ 評価: {rating}（{reviews}件）\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
+        message = f"🏞️ {name}\n📍 {address}\n\n{gpt_msg}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message))
 
-    # LINEの制限に配慮して5件ずつ送信
     for i in range(0, len(messages), 5):
         line_bot_api.reply_message(event.reply_token, messages[i:i+5])
 
-# 🔽 Render用の決定済み起動処理
+# 🔽 決定事項：Render用起動処理
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
