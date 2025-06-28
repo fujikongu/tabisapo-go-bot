@@ -9,11 +9,10 @@ from linebot.models import (
 import os
 import openai
 import requests
-import time
 
 app = Flask(__name__)
 
-# 環境変数からトークン取得
+# 環境変数
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -23,7 +22,7 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 openai.api_key = OPENAI_API_KEY
 
-# ユーザーの選択ジャンルを一時保存
+# ユーザーごとの選択ジャンル記録
 user_selected_genre = {}
 
 # クイックリプライジャンル
@@ -51,13 +50,13 @@ def handle_text(event):
         user_selected_genre[user_id] = text
         reply = TextSendMessage(text=f"📍「{text}」を探します！\n現在地を送信してください。")
     else:
-        quick_reply_buttons = [
+        buttons = [
             QuickReplyButton(action=MessageAction(label=label, text=label))
             for label in genre_labels
         ]
         reply = TextSendMessage(
             text="👇 探したいジャンルを選んでください",
-            quick_reply=QuickReply(items=quick_reply_buttons)
+            quick_reply=QuickReply(items=buttons)
         )
     line_bot_api.reply_message(event.reply_token, reply)
 
@@ -76,33 +75,19 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
-    # Google Maps APIで最大60件取得（3ページ）
-    all_results = []
-    next_page_token = None
+    maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
+    params = {
+        "location": f"{lat},{lng}",
+        "radius": 10000,
+        "keyword": genre,
+        "language": "ja",
+        "key": GOOGLE_API_KEY
+    }
 
-    for _ in range(3):
-        params = {
-            "location": f"{lat},{lng}",
-            "radius": 10000,
-            "keyword": genre,
-            "language": "ja",
-            "key": GOOGLE_API_KEY
-        }
-        if next_page_token:
-            params["pagetoken"] = next_page_token
-            time.sleep(2)  # トークン有効化待ち
+    res = requests.get(maps_url, params=params).json()
+    results = res.get("results", [])
 
-        res = requests.get(
-            "https://maps.googleapis.com/maps/api/place/nearbysearch/json",
-            params=params
-        ).json()
-        all_results.extend(res.get("results", []))
-
-        next_page_token = res.get("next_page_token")
-        if not next_page_token:
-            break
-
-    if not all_results:
+    if not results:
         line_bot_api.reply_message(
             event.reply_token,
             TextSendMessage(text=f"{genre}が近くに見つかりませんでした。")
@@ -110,39 +95,37 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in all_results[:10]:
+    for spot in results[:60]:  # 最大60件取得
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
-        place_lat = spot["geometry"]["location"]["lat"]
-        place_lng = spot["geometry"]["location"]["lng"]
-        map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
+        lat = spot["geometry"]["location"]["lat"]
+        lng = spot["geometry"]["location"]["lng"]
+        map_link = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
 
-        # ChatGPT案内文生成（案2・観光案内人スタイル）
-        prompt = f"""
-あなたは観光案内人です。以下のスポットを観光客におすすめするとしたら、どう紹介しますか？
+        # ChatGPTに紹介文を生成させる（観光案内人スタイル）
+        prompt = f"""あなたは観光案内人です。以下のスポットを旅行者におすすめするとしたら、どう紹介しますか？
 
 名称：{name}
 ジャンル：{genre}
 
-場所の特徴や雰囲気、旅行者が嬉しいポイントを含めて、100文字以内でやさしい案内文をお願いします。
-        """.strip()
-
+場所の特徴や雰囲気、旅行者が嬉しいポイントを含めて、100文字以内でやさしい案内文をお願いします。"""
         try:
             completion = openai.ChatCompletion.create(
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
-            gpt_message = completion.choices[0].message["content"].strip()
+            guide = completion.choices[0].message["content"]
         except Exception:
-            gpt_message = "旅行者におすすめのスポットです！"
+            guide = "旅行者におすすめのスポットです！"
 
-        message = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
-        messages.append(TextSendMessage(text=message))
+        msg = f"🏞️ {name}\n📍 {address}\n\n{guide}\n\n👉 [Googleマップで見る]({map_link})"
+        messages.append(TextSendMessage(text=msg))
 
-    for i in range(0, len(messages), 5):
-        line_bot_api.reply_message(event.reply_token, messages[i:i+5])
+    # 10件ずつ分割送信（LINE制限対策）
+    for i in range(0, len(messages), 10):
+        line_bot_api.push_message(user_id, messages[i:i+10])
 
-# 🔽 決定事項の起動処理（Render用）
+# ✅ 決定事項の起動構文（Render対応済み）
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
