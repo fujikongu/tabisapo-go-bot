@@ -117,5 +117,7 @@ def handle_location(event):
     reply_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply_text))
 
+# ✅ Renderでポートを明示するために下記を追加
 if __name__ == "__main__":
-    app.run()
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
