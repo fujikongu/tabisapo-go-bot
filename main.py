@@ -12,6 +12,7 @@ import requests
 
 app = Flask(__name__)
 
+# 環境変数から取得
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -21,8 +22,10 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 openai.api_key = OPENAI_API_KEY
 
+# ユーザーごとのジャンル記憶
 user_selected_genre = {}
 
+# ジャンル（13件：LINE QuickReply上限）
 genre_labels = [
     "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
     "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
@@ -53,7 +56,7 @@ def handle_text(event):
         quick_reply = QuickReply(
             items=[
                 QuickReplyButton(action=MessageAction(label=label, text=label))
-                for label in genre_labels[:13]
+                for label in genre_labels
             ]
         )
         line_bot_api.reply_message(
@@ -79,6 +82,7 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
+    # Google Maps APIリクエスト
     maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -98,13 +102,14 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:10]:  # 最大10件取得
+    for spot in results[:10]:  # 最大10件
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
         place_lng = spot["geometry"]["location"]["lng"]
         map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
 
+        # ChatGPT案内文
         prompt = f"""あなたは観光案内人です。以下のスポットを観光客におすすめするとしたら、どう紹介しますか？
 
 名称：{name}
@@ -121,14 +126,22 @@ def handle_location(event):
         except Exception as e:
             gpt_message = "旅行者におすすめのスポットです！"
 
-        text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
-        messages.append(TextSendMessage(text=text))
+        message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
+        messages.append(TextSendMessage(text=message_text))
 
-    # 最初の5件は reply_message、次の5件は push_message
-    line_bot_api.reply_message(event.reply_token, messages[:5])
-    if len(messages) > 5:
-        line_bot_api.push_message(user_id, messages[5:])
+    # 返信 + 分割Push送信
+    try:
+        line_bot_api.reply_message(event.reply_token, messages[:5])
+    except Exception as e:
+        print("Replyエラー:", e)
 
+    for msg in messages[5:]:
+        try:
+            line_bot_api.push_message(user_id, msg)
+        except Exception as e:
+            print("Pushエラー:", e)
+
+# Render起動処理（固定）
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
