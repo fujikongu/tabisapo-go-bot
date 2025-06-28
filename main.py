@@ -25,11 +25,10 @@ openai.api_key = OPENAI_API_KEY
 # ユーザーごとの選択ジャンルを記憶
 user_selected_genre = {}
 
-# クイックリプライのジャンル一覧
+# ジャンルラベル（飲食を5ジャンルに分割）
 genre_labels = [
-    "ラーメン", "和食", "中華", "焼肉", "ファミレス",
-    "ホテル", "観光地", "温泉", "遊び場", "コンビニ",
-    "駅", "トイレ", "駐車場"
+    "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
+    "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ", "駅"
 ]
 
 @app.route("/callback", methods=["POST"])
@@ -76,7 +75,7 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
-    # Google Maps API でスポット検索（半径10km、最大20件）
+    # Google Maps APIでスポット検索（半径10km）
     maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -96,14 +95,14 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:20]:
+    for spot in results[:20]:  # 最大20件まで処理
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
         place_lng = spot["geometry"]["location"]["lng"]
         map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
 
-        # ChatGPT による案内文生成
+        # ChatGPTによる案内文生成
         prompt = f"""あなたは観光案内人です。以下のスポットを観光客におすすめするとしたら、どう紹介しますか？
 
 名称：{name}
@@ -117,17 +116,18 @@ def handle_location(event):
                 messages=[{"role": "user", "content": prompt}]
             )
             gpt_message = completion.choices[0].message["content"].strip()
-        except Exception:
+        except Exception as e:
+            print("ChatGPTエラー:", e)
             gpt_message = "旅行者におすすめのスポットです！"
 
         message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message_text))
 
-    # LINEの制限対策として5件ずつ送信
+    # 5件ずつ送信（LINEの一括送信制限に対応）
     for i in range(0, len(messages), 5):
         line_bot_api.push_message(user_id, messages[i:i+5])
 
-# 🔽 決定事項：Render対応の起動処理
+# 🔽 Render用：アプリ起動処理
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
