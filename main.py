@@ -1,5 +1,5 @@
 
-from flask import Flask, request, abort
+from flask import Flasfrom flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -95,10 +95,15 @@ def handle_location(event):
         )
         return
 
+    # 人気順に並べ替え（レビュー件数が多い順）
+    results = sorted(results, key=lambda x: x.get("user_ratings_total", 0), reverse=True)
+
     messages = []
     for spot in results[:10]:
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
+        rating = spot.get("rating", "N/A")
+        reviews = spot.get("user_ratings_total", 0)
         place_lat = spot["geometry"]["location"]["lat"]
         place_lng = spot["geometry"]["location"]["lng"]
         map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
@@ -114,13 +119,14 @@ def handle_location(event):
         except Exception:
             gpt_message = "旅行者におすすめのスポットです！"
 
-        message = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
+        message = f"🏞️ {name}\n📍 {address}\n⭐️ 評価: {rating}（{reviews}件）\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message))
 
-    for i in range(0, len(messages), 5):  # 5件ずつ分割送信
+    # LINEの制限に配慮して5件ずつ送信
+    for i in range(0, len(messages), 5):
         line_bot_api.reply_message(event.reply_token, messages[i:i+5])
 
-# 🔽 決定事項の起動処理（Render対策済み）
+# 🔽 Render用の決定済み起動処理
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
