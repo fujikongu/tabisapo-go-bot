@@ -12,7 +12,6 @@ import requests
 
 app = Flask(__name__)
 
-# 環境変数
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -22,10 +21,8 @@ line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
 openai.api_key = OPENAI_API_KEY
 
-# ジャンル記憶用辞書
 user_selected_genre = {}
 
-# 対応ジャンル（飲食含む）
 genre_labels = [
     "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
     "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
@@ -101,7 +98,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:10]:  # 10件まで取得
+    for spot in results[:10]:  # 最大10件取得
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
@@ -122,18 +119,16 @@ def handle_location(event):
             )
             gpt_message = completion.choices[0].message["content"].strip()
         except Exception as e:
-            print("ChatGPTエラー:", e)
             gpt_message = "旅行者におすすめのスポットです！"
 
         text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=text))
 
-    # 5件ずつに分割して送信（LINE制限対策）
-    for i in range(0, len(messages), 5):
-        chunk = messages[i:i+5]
-        line_bot_api.reply_message(event.reply_token if i == 0 else None, messages=chunk)
+    # 最初の5件は reply_message、次の5件は push_message
+    line_bot_api.reply_message(event.reply_token, messages[:5])
+    if len(messages) > 5:
+        line_bot_api.push_message(user_id, messages[5:])
 
-# Render起動
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
