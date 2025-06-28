@@ -12,29 +12,30 @@ import requests
 
 app = Flask(__name__)
 
-# 環境変数
+# 環境変数からトークン取得
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
+openai.api_key = OPENAI_API_KEY
 
-# ジャンル記憶
+# ユーザーの選択ジャンルを一時保存
 user_selected_genre = {}
 
-# 対応ジャンル（13個）
+# クイックリプライジャンル（飲食ジャンル含む）
 genre_labels = [
-    "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
-    "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
+    "トイレ", "駐車場", "コンビニ", "カフェ", "ホテル",
+    "観光地", "温泉", "遊び場", "ラーメン", "和食", "中華", "焼肉", "ファミレス"
 ]
 
 @app.route("/callback", methods=["POST"])
 def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
+
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
@@ -63,11 +64,10 @@ def handle_text(event):
 @handler.add(MessageEvent, message=LocationMessage)
 def handle_location(event):
     user_id = event.source.user_id
-    genre = user_selected_genre.pop(user_id, None)
+    genre = user_selected_genre.get(user_id)
 
     if not genre:
-        msg = TextSendMessage(text="先にジャンルを選んでください。")
-        line_bot_api.reply_message(event.reply_token, msg)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text="先にジャンルを選んでください。"))
         return
 
     lat = event.message.latitude
@@ -85,18 +85,18 @@ def handle_location(event):
     results = res.get("results", [])
 
     if not results:
-        msg = TextSendMessage(text=f"{genre}が近くに見つかりませんでした。")
-        line_bot_api.reply_message(event.reply_token, msg)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=f"{genre}が近くに見つかりませんでした。"))
         return
 
     messages = []
-    for spot in results[:10]:  # 最大10件
+    for spot in results[:10]:  # 最大10件まで
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
-        place_lat = spot["geometry"]["location"]["lat"]
-        place_lng = spot["geometry"]["location"]["lng"]
-        map_link = f"https://www.google.com/maps/search/?api=1&query={place_lat},{place_lng}"
+        lat = spot["geometry"]["location"]["lat"]
+        lng = spot["geometry"]["location"]["lng"]
+        map_url = f"https://www.google.com/maps/search/?api=1&query={lat},{lng}"
 
+        # ChatGPT案内文生成
         prompt = f"""あなたは観光案内人です。以下のスポットを観光客におすすめするとしたら、どう紹介しますか？
 
 名称：{name}
@@ -109,17 +109,17 @@ def handle_location(event):
                 model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
-            gpt_message = completion.choices[0].message["content"].strip()
+            message = completion.choices[0].message["content"].strip()
         except Exception as e:
-            print("ChatGPTエラー:", e)
-            gpt_message = "旅行者におすすめのスポットです！"
+            message = "旅行者におすすめのスポットです！"
 
-        text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
-        messages.append(TextSendMessage(text=text))
+        messages.append(TextSendMessage(
+            text=f"🏞️ {name}\n📍 {address}\n\n{message}\n\n👉 [Googleマップで見る]({map_url})"
+        ))
 
     line_bot_api.reply_message(event.reply_token, messages)
 
-# Render起動用
+# Render用
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(host="0.0.0.0", port=port))
