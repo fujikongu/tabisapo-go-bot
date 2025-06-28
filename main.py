@@ -1,5 +1,5 @@
 
-from flask import Flask, request, abort
+from flask import Flask, requfrom flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import (
@@ -12,7 +12,7 @@ import requests
 
 app = Flask(__name__)
 
-# 環境変数
+# 環境変数から取得
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv("LINE_CHANNEL_ACCESS_TOKEN")
 LINE_CHANNEL_SECRET = os.getenv("LINE_CHANNEL_SECRET")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
@@ -25,10 +25,10 @@ openai.api_key = OPENAI_API_KEY
 # ユーザーごとのジャンル記憶
 user_selected_genre = {}
 
-# ジャンル（13件）
+# ジャンル（13件：LINE QuickReply上限）
 genre_labels = [
     "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
-    "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
+    "カフェ", "ホテル", "観光地", "温泉", "アミューズメント", "コンビニ"
 ]
 
 @app.route("/callback", methods=["POST"])
@@ -82,6 +82,7 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
+    # Google Maps APIリクエスト
     maps_url = "https://maps.googleapis.com/maps/api/place/nearbysearch/json"
     params = {
         "location": f"{lat},{lng}",
@@ -101,7 +102,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:5]:  # ✅ 最大5件だけ
+    for spot in results[:10]:  # 最大10件取得
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
@@ -128,13 +129,13 @@ def handle_location(event):
         message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message_text))
 
-    # ✅ reply_message のみ使用（5件以内）
+    # 最大5件まで送信
     try:
-        line_bot_api.reply_message(event.reply_token, messages)
+        line_bot_api.reply_message(event.reply_token, messages[:5])
     except Exception as e:
-        print("送信エラー:", e)
+        print("Replyエラー:", e)
 
-# Render起動コード
+# Render起動処理（固定）
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
