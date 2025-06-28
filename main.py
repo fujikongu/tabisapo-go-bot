@@ -25,7 +25,7 @@ openai.api_key = OPENAI_API_KEY
 # ユーザーごとのジャンル記憶
 user_selected_genre = {}
 
-# 対応ジャンル（最大13件：QuickReply上限）
+# ジャンル（13件）
 genre_labels = [
     "トイレ", "駐車場", "ラーメン", "和食", "中華", "焼肉", "ファミレス",
     "カフェ", "ホテル", "観光地", "温泉", "遊び場", "コンビニ"
@@ -90,18 +90,8 @@ def handle_location(event):
         "language": "ja",
         "key": GOOGLE_API_KEY
     }
-
-    try:
-        res = requests.get(maps_url, params=params)
-        res.raise_for_status()
-        results = res.json().get("results", [])
-    except Exception as e:
-        print("Google APIエラー:", e)
-        line_bot_api.reply_message(
-            event.reply_token,
-            TextSendMessage(text="検索に失敗しました。時間をおいて再度お試しください。")
-        )
-        return
+    res = requests.get(maps_url, params=params).json()
+    results = res.get("results", [])
 
     if not results:
         line_bot_api.reply_message(
@@ -111,7 +101,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:10]:  # 最大10件取得
+    for spot in results[:5]:  # ✅ 最大5件だけ
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
@@ -133,19 +123,18 @@ def handle_location(event):
             )
             gpt_message = completion.choices[0].message["content"].strip()
         except Exception as e:
-            print("ChatGPTエラー:", e)
             gpt_message = "旅行者におすすめのスポットです！"
 
         message_text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=message_text))
 
-    # 🔽 10件まとめて一括送信（pushも分割も不要）
+    # ✅ reply_message のみ使用（5件以内）
     try:
         line_bot_api.reply_message(event.reply_token, messages)
     except Exception as e:
         print("送信エラー:", e)
 
-# Render起動コード（固定）
+# Render起動コード
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
