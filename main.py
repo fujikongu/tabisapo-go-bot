@@ -95,7 +95,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:60]:  # 最大60件まで処理
+    for spot in results[:20]:  # ← ここを60→20に変更
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
