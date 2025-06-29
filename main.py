@@ -82,13 +82,16 @@ def handle_location(event):
     lat = event.message.latitude
     lng = event.message.longitude
 
-    # ジャンル別で検索範囲を設定
+    # ジャンル別で検索範囲とキーワードを設定
     if genre == "トイレ":
         radius = 100
         keyword = "トイレ"
     elif genre == "駐車場":
         radius = 1000
         keyword = "コインパーキング"
+    elif genre == "コンビニ":
+        radius = 500
+        keyword = "コンビニ"
     else:
         radius = 10000
         keyword = genre
@@ -113,7 +116,7 @@ def handle_location(event):
         return
 
     messages = []
-    for spot in results[:10]:  # ← ★ 最大10件に修正
+    for spot in results[:10]:  # 最大10件
         name = spot.get("name", "名称不明")
         address = spot.get("vicinity", "住所不明")
         place_lat = spot["geometry"]["location"]["lat"]
@@ -141,7 +144,7 @@ def handle_location(event):
         text = f"🏞️ {name}\n📍 {address}\n\n{gpt_message}\n\n👉 [Googleマップで見る]({map_link})"
         messages.append(TextSendMessage(text=text))
 
-    # 返信（LINE制限に注意）
+    # 返信（5件）＋残りをPush送信
     try:
         line_bot_api.reply_message(event.reply_token, messages[:5])
         for msg in messages[5:]:
@@ -149,7 +152,7 @@ def handle_location(event):
     except Exception as e:
         print("送信エラー:", e)
 
-# Render用起動処理
+# Render起動処理
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
